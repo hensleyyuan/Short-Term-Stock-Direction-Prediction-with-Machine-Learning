@@ -1,0 +1,170 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix
+import matplotlib.gridspec as gridspec
+
+plt.rcParams['axes.unicode_minus'] = False
+sns.set_style("whitegrid")
+
+print("Final Evaluation Dashboard\n")
+
+y_true = y_val
+y_pred = y_val_pred
+y_proba = y_val_proba
+importance_df = importances.head(12).copy()
+
+fig = plt.figure(figsize=(20, 18))
+gs = gridspec.GridSpec(5, 3, figure=fig, height_ratios=[1, 1.1, 1.15, 1.2, 1.1],
+                       hspace=0.42, wspace=0.3)
+
+fig.suptitle('Model Evaluation Dashboard\nXGBoost - Next Day Direction Prediction', 
+             fontsize=18, fontweight='bold', y=0.98)
+
+#Confusion Matrix
+ax1 = fig.add_subplot(gs[0, 0])
+cm = confusion_matrix(y_true, y_pred)
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax1,
+            xticklabels=['Pred Down', 'Pred Up'],
+            yticklabels=['True Down', 'True Up'])
+ax1.set_title('Confusion Matrix', fontsize=13, fontweight='bold')
+
+#Key Metrics
+ax2 = fig.add_subplot(gs[0, 1])
+ax2.axis('off')
+metrics_text = """
+Classification Metrics
+------------------------
+Accuracy     : 0.5285
+F1 Score     : 0.6332
+ROC-AUC      : 0.5198
+
+Best Iteration : 32
+Features used  : 19
+"""
+ax2.text(0.05, 0.75, metrics_text, fontsize=12, verticalalignment='top',
+         fontfamily='monospace',
+         bbox=dict(boxstyle='round', facecolor='#FFF3CD', alpha=0.9))
+ax2.set_title('Key Metrics', fontsize=13, fontweight='bold')
+
+#Backtest Table
+ax3 = fig.add_subplot(gs[0, 2])
+ax3.axis('off')
+table_data = [
+    ['Strategy', 'Total Return', 'Sharpe', 'Max DD'],
+    ['Model', '91.77%', '1.76', '-26.99%'],
+    ['Buy & Hold', '99.83%', '1.81', '-27.52%'],
+    ['Random', '17.13%', '0.88', '-11.61%']
+]
+table = ax3.table(cellText=table_data, loc='center', cellLoc='center')
+table.auto_set_font_size(False)
+table.set_fontsize(11)
+table.scale(1.1, 1.9)
+for i in range(4):
+    table[(0, i)].set_facecolor('#2F5496')
+    table[(0, i)].set_text_props(color='white', fontweight='bold')
+ax3.set_title('Backtest Performance', fontsize=13, fontweight='bold')
+
+#Feature Importance
+ax4 = fig.add_subplot(gs[1, :2])
+sns.barplot(data=importance_df, x='importance', y='feature', palette='viridis', ax=ax4)
+ax4.set_title('Top Feature Importance', fontsize=13, fontweight='bold')
+ax4.set_xlabel('Importance')
+ax4.set_ylabel('')
+
+#Predicted Probability Distribution
+ax5 = fig.add_subplot(gs[1, 2])
+sns.histplot(y_proba, bins=30, kde=True, color='#5B9BD5', ax=ax5)
+ax5.axvline(0.5, color='red', linestyle='--', linewidth=1.5, label='Threshold 0.5')
+ax5.set_title('Predicted Probability Distribution', fontsize=13, fontweight='bold')
+ax5.set_xlabel('Probability of Up')
+ax5.legend()
+
+#Model Comparison Table
+ax6 = fig.add_subplot(gs[2, :])
+ax6.axis('off')
+model_compare = [
+    ['Model', 'ROC-AUC', 'Accuracy', 'F1', 'Remarks'],
+    ['Logistic Regression', '~0.505', '~0.51', '~0.58', 'Near random'],
+    ['Random Forest', '~0.520', '~0.52', '~0.59', 'Slight improvement'],
+    ['LightGBM', '~0.517', '~0.53', '~0.62', 'Better feature use'],
+    ['XGBoost (Final)', '0.5198', '0.5285', '0.6332', 'Best so far']
+]
+table2 = ax6.table(cellText=model_compare, loc='center', cellLoc='center')
+table2.auto_set_font_size(False)
+table2.set_fontsize(12)
+table2.scale(1.2, 2.0)
+for i in range(5):
+    table2[(0, i)].set_facecolor('#548235')
+    table2[(0, i)].set_text_props(color='white', fontweight='bold')
+for i in range(5):
+    table2[(4, i)].set_facecolor('#E2EFDA')
+ax6.set_title('Model Comparison Across Experiments', fontsize=14, fontweight='bold', pad=12)
+
+#Prediction vs Actual + Confidence
+ax7 = fig.add_subplot(gs[3, 0])
+correct = (y_pred == y_true)
+ax7.hist(y_proba[correct], bins=20, alpha=0.7, label='Correct', color='green')
+ax7.hist(y_proba[~correct], bins=20, alpha=0.7, label='Wrong', color='red')
+ax7.set_title('Confidence: Correct vs Wrong', fontsize=12, fontweight='bold')
+ax7.set_xlabel('Predicted Probability')
+ax7.legend()
+
+ax8 = fig.add_subplot(gs[3, 1])
+bins = np.linspace(0, 1, 11)
+bin_centers = (bins[:-1] + bins[1:]) / 2
+bin_acc = []
+for i in range(len(bins)-1):
+    mask = (y_proba >= bins[i]) & (y_proba < bins[i+1])
+    if mask.sum() > 0:
+        bin_acc.append((y_pred[mask] == y_true[mask]).mean())
+    else:
+        bin_acc.append(np.nan)
+ax8.plot(bin_centers, bin_acc, marker='o', linewidth=2)
+ax8.axhline(0.5, color='gray', linestyle='--')
+ax8.set_title('Accuracy by Confidence Bin', fontsize=12, fontweight='bold')
+ax8.set_xlabel('Predicted Probability')
+ax8.set_ylabel('Accuracy')
+ax8.set_ylim(0, 1)
+
+ax9 = fig.add_subplot(gs[3, 2])
+ax9.axis('off')
+conf_text = """
+Confidence Analysis
+-------------------
+• Most predictions cluster
+  around 0.5 (low confidence)
+
+• Higher probability does not
+  strongly improve accuracy
+
+• Model lacks strong conviction
+"""
+ax9.text(0.05, 0.7, conf_text, fontsize=11, verticalalignment='top',
+         fontfamily='monospace',
+         bbox=dict(boxstyle='round', facecolor='#E2EFDA', alpha=0.9))
+ax9.set_title('Confidence Insight', fontsize=12, fontweight='bold')
+
+#Limitations & Risks
+ax10 = fig.add_subplot(gs[4, :])
+ax10.axis('off')
+limitation_text = """
+Limitations & Risks
+1. Weak predictive power: ROC-AUC only ~0.52, barely better than random guessing.
+2. Sensitive to market regime: Long-short signals can suffer large drawdowns in strong trends.
+3. Limited features: Relies mainly on price and traditional technical indicators.
+4. Leakage risk: Early experiments showed target leakage; performance dropped after strict cleaning.
+5. Backtest vs Reality: Transaction costs, slippage and liquidity impact are not included.
+6. Limited test period: Results may not generalize across different market cycles.
+"""
+ax10.text(0.02, 0.92, limitation_text, fontsize=11.5, verticalalignment='top',
+          linespacing=1.45,
+          bbox=dict(boxstyle='round', facecolor='#FCE4D6', alpha=0.9))
+ax10.set_title('Limitations & Risks', fontsize=14, fontweight='bold', color='#C65911', pad=8)
+
+plt.tight_layout(rect=[0, 0, 1, 0.96])
+plt.savefig('Final_Evaluation_Dashboard.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+print("Final Dashboard saved")
