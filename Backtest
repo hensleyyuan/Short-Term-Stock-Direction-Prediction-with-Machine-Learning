@@ -1,0 +1,101 @@
+import pandas as pd
+import numpy as np
+from xgboost import XGBClassifier
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+print("BackTest\n")
+data_dir = Path.cwd()
+
+train_df = pd.read_csv(data_dir / "Train_Scaled.csv")
+val_df   = pd.read_csv(data_dir / "Val_Scaled.csv")
+test_df  = pd.read_csv(data_dir / "Test_Scaled.csv")
+
+original = pd.read_csv(data_dir / "All_Stocks_New_Target_NextDay.csv")
+original['Date'] = pd.to_datetime(original['Date'])
+original = original[['Date', 'Ticker', 'Close']].copy()
+original = original.rename(columns={'Close': 'Close_raw'})
+
+test_df['Date'] = pd.to_datetime(test_df['Date'])
+test_df = test_df.merge(original, on=['Date', 'Ticker'], how='left')
+
+full_train = pd.concat([train_df, val_df], ignore_index=True)
+
+target_col = 'Target_Next_Day'
+return_related = [col for col in train_df.columns if 'Return_roll' in col]
+exclude_cols = ['Date', 'Ticker', target_col, 'Return', 'Target_Return'] + return_related
+
+X_train = full_train.drop(columns=exclude_cols)
+y_train = full_train[target_col]
+X_test  = test_df.drop(columns=exclude_cols + ['Close_raw'], errors='ignore')
+
+model = XGBClassifier(
+    n_estimators=2000,
+    learning_rate=0.0147,
+    max_depth=4,
+    min_child_weight=4,
+    subsample=0.85,
+    colsample_bytree=0.61,
+    gamma=0.054,
+    reg_alpha=0.556,
+    reg_lambda=0.111,
+    random_state=42,
+    n_jobs=-1,
+    eval_metric='auc',
+    early_stopping_rounds=50
+)
+
+model.fit(X_train, y_train, eval_set=[(X_test, test_df[target_col])], verbose=False)
+print(f"Best Iteration: {model.best_iteration}")
+
+test_df['pred'] = model.predict(X_test)
+test_df = test_df.sort_values(['Ticker', 'Date'])
+
+test_df['next_return'] = test_df.groupby('Ticker')['Close_raw'].pct_change().shift(-1)
+test_df = test_df.dropna(subset=['next_return'])
+
+test_df['strategy_return'] = np.where(test_df['pred'] == 1, test_df['next_return'], -test_df['next_return'])
+test_df['bh_return'] = test_df['next_return']
+
+np.random.seed(42)
+test_df['random_signal'] = np.random.randint(0, 2, size=len(test_df))
+test_df['random_return'] = np.where(test_df['random_signal'] == 1, test_df['next_return'], -test_df['next_return'])
+
+daily = test_df.groupby('Date').agg({
+    'strategy_return': 'mean',
+    'bh_return': 'mean',
+    'random_return': 'mean'
+}).reset_index()
+
+daily['strategy_cum'] = (1 + daily['strategy_return']).cumprod()
+daily['bh_cum'] = (1 + daily['bh_return']).cumprod()
+daily['random_cum'] = (1 + daily['random_return']).cumprod()
+
+def performance_metrics(returns, name):
+    total_return = (1 + returns).prod() - 1
+    sharpe = returns.mean() / returns.std() * np.sqrt(252) if returns.std() != 0 else 0
+    cum = (1 + returns).cumprod()
+    max_dd = ((cum - cum.cummax()) / cum.cummax()).min()
+    
+    print(f"\n【{name}】")
+    print(f"Total Return   : {total_return:8.2%}")
+    print(f"Sharpe Ratio   : {sharpe:8.2f}")
+    print(f"Max Drawdown   : {max_dd:8.2%}")
+
+print("=" * 45)
+performance_metrics(daily['strategy_return'], "Model")
+performance_metrics(daily['bh_return'], "Buy & Hold")
+performance_metrics(daily['random_return'], "Random")
+print("=" * 45)
+
+plt.figure(figsize=(13, 6))
+plt.plot(daily['Date'], daily['strategy_cum'], label='Model Strategy', linewidth=2)
+plt.plot(daily['Date'], daily['bh_cum'], label='Buy & Hold', linewidth=1.5, alpha=0.8)
+plt.plot(daily['Date'], daily['random_cum'], label='Random Strategy', linewidth=1.5, alpha=0.7, linestyle='--')
+plt.title('Backtest: Model vs Buy&Hold vs Random (Corrected)')
+plt.xlabel('Date')
+plt.ylabel('Cumulative Return')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
